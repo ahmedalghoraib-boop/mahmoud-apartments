@@ -22,6 +22,12 @@ OUT = os.path.join(HERE, "index.html")
 # ---------- HARD EXCLUSION (asserted, never advisory) ----------
 EXCL = re.compile(r"زهراء|zahraa|zahrah|التبة|التبه|شبرا|shobra|shubra", re.I)
 
+# ---------- HIDDEN from site but KEPT in JSON (user request) ----------
+# Al Waha City compound + حي الواحة neighborhood MUST NOT appear in the HTML.
+# Rows stay in the canonical JSON; they are simply not rendered.
+HIDDEN_PAT = re.compile(
+    r"al\s*-?\s*waha\b|waha\s*city\b|حي\s*الواح[ةه]|الواح[ةه]", re.I)
+
 def assert_clean(rows):
     bad = []
     for r in rows:
@@ -31,6 +37,11 @@ def assert_clean(rows):
     if bad:
         raise SystemExit("EXCLUSION VIOLATION: %d rows matched Zahraa/الزيبرا/التبة/شبرا: %s"
                          % (len(bad), [b["url"] for b in bad]))
+
+def visible(rows):
+    """Filter out hidden areas (Al Waha). Returned rows are what gets rendered."""
+    return [r for r in rows if not HIDDEN_PAT.search(
+        " ".join(str(r.get(k, "")) for k in ("url", "title", "area")))]
 
 # ---------- formatting ----------
 def fmt_price(p):
@@ -167,11 +178,13 @@ th{padding:0 14px 4px;text-align:start;font-size:12px;color:var(--muted);font-we
 def build():
     rows = json.load(open(SRC))
     assert_clean(rows)
-    body = "".join(row_html(r) for r in rows)
+    vis = visible(rows)
+    body = "".join(row_html(r) for r in vis)
     out = HEAD.replace("<!--ROWS-->", body)
     with open(OUT, "w", encoding="utf-8") as f:
         f.write(out)
-    print("built %s: %d rows" % (OUT, len(rows)))
+    print("built %s: %d visible rows (hidden %d of %d in JSON)"
+          % (OUT, len(vis), len(rows) - len(vis), len(rows)))
 
 if __name__ == "__main__":
     build()
