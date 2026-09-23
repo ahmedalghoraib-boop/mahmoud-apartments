@@ -4,22 +4,37 @@
 
 Source of truth: mahmoud_apartments_canonical.json (next to this script).
 Run:  python3 publish_site.py            # writes index.html next to the script
+Canonical schema (v3):
+  url, title, price, area, posted, platform,
+  bedrooms, bathrooms_verified, sqm_verified,
+  furnishing_status ('verified-unfurnished' | 'unfurnished (not re-verified)'),
+  seller, seller_type, drive_am_min, drive_km
 """
 import json
 import html as H
 import os
+import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, "mahmoud_apartments_canonical.json")
 OUT = os.path.join(HERE, "index.html")
 
+# ---------- HARD EXCLUSION (asserted, never advisory) ----------
+EXCL = re.compile(r"زهراء|zahraa|zahrah|التبة|التبه|شبرا|shobra|shubra", re.I)
+
+def assert_clean(rows):
+    bad = []
+    for r in rows:
+        hay = " ".join(str(r.get(k, "")) for k in ("url", "title", "area"))
+        if EXCL.search(hay):
+            bad.append(r["url"])
+    if bad:
+        raise SystemExit("EXCLUSION VIOLATION: %d rows matched Zahraa/الزيبرا/التبة/شبرا: %s"
+                         % (len(bad), [b["url"] for b in bad]))
+
+# ---------- formatting ----------
 def fmt_price(p):
     return "{:,} EGP".format(p)
-
-def plat_label(p):
-    return {"dubizzle": "Dubizzle", "dubizzle-olx": "Dubizzle",
-            "propertyfinder": "Propertyfinder", "facebook": "Facebook",
-            "aqarmap": "Aqarmap"}.get(p, p or "—")
 
 def sqm_txt(s):
     if s is None:
@@ -28,50 +43,53 @@ def sqm_txt(s):
     return "{:g}m²".format(int(s) if s == int(s) else s)
 
 def drive_txt(r):
-    am, km = r.get("am"), r.get("km")
+    am, km = r.get("drive_am_min"), r.get("drive_km")
     if not am:
         return "—"
     line = "🚗 {:g} min · {} km".format(am, km) if km else "🚗 {:g} min".format(am)
     sub = "ذهاب 10ص؛ عودة ~{:g} min".format(2 * am + 6)
-    return '<span class="b">%s</span><br><span class="s">%s</span>' % (H.escape(line), H.escape(sub))
+    return '<span class="b">%s</span><br><span class="s">%s</span>' % (H.escape(str(line)), H.escape(str(sub)))
+
+FURN_LABEL = {
+    "verified-unfurnished": "فاضية — تم التحقق ✅",
+    "unfurnished (not re-verified)": "فاضية (غير مُتحقق منها)",
+}
 
 def seller_txt(r):
     name = (r.get("seller") or "").strip()
     styp = (r.get("seller_type") or "").strip()
     if not name:
         return "Verify on contact"
-    label = styp if styp else "Verify on contact"
-    return "%s<br><span class='s'>%s</span>" % (H.escape(name), H.escape(label))
-
-def furn_status(r):
-    if r.get("verified_furn") is True:
-        return "فاضية – تم التحقق ✅"
-    if r.get("verified_furn") is False or r.get("verified_furn") is None:
-        return "فاضية"
-    return "فاضية"
+    return "%s<br><span class='s'>%s</span>" % (H.escape(name), H.escape(styp or "Verify on contact"))
 
 def row_html(r):
+    bath = r.get("bathrooms_verified")
+    bath_s = "{:g}".format(bath) if bath else "—"
+    sqm = sqm_txt(r.get("sqm_verified"))
+    cell = "%s Bedrooms · %s · %s Bath" % (r["bedrooms"], sqm, bath_s)
     return """<tr class="row" data-am="%s" data-price="%s" data-sqm="%s" data-seller-type="%s" data-bed="%s" data-title="%s">
  <td><span class="area">%s</span><br><span class="s">%s</span></td>
  <td><a href="%s" target="_blank">%s</a></td>
  <td><b>%s</b></td>
- <td>%s Bedrooms · %s</td>
+ <td>%s</td>
  <td>%s</td>
  <td>%s</td>
  <td>%s</td>
  <td>%s</td>
 </tr>
-""" % (H.escape(str(r['am'] or ''), quote=True), H.escape(str(r['price']), quote=True),
-       H.escape(str(r['sqm'] or 0), quote=True),
-       H.escape(r.get('seller_type') or '', quote=True),
-       H.escape(str(r['br']), quote=True),
+""" % (H.escape(str(r.get('drive_am_min') or ''), quote=True),
+       H.escape(str(r['price']), quote=True),
+       H.escape(str(r.get('sqm_verified') or 0), quote=True),
+       H.escape(r.get('seller') and (r.get('seller_type') or '') or 'Verify on contact', quote=True),
+       H.escape(str(r.get('bedrooms') or ''), quote=True),
        H.escape(r['title'], quote=True),
-       H.escape(r['area']), H.escape(r['posted']),
+       H.escape(r['area']), H.escape(str(r['posted'])),
        H.escape(r['url'], quote=True), H.escape(r['title']),
-       fmt_price(r['price']),
-       r['br'], sqm_txt(r['sqm']),
-       plat_label(r['plat']), seller_txt(r), drive_txt(r),
-       furn_status(r))
+       H.escape(fmt_price(r['price'])),
+       H.escape(str(cell)),
+       H.escape(r['platform']),
+       seller_txt(r), drive_txt(r),
+       H.escape(FURN_LABEL.get(r.get('furnishing_status'), r.get('furnishing_status') or '—')))
 
 HEAD = """<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>شقق الإيجار القريبة من مكتب محمود — El Tayaran</title><style>
@@ -93,7 +111,7 @@ a{color:#0a5bd6;text-decoration:none} a:hover{text-decoration:underline}
 th{padding:0 14px 4px;text-align:start;font-size:12px;color:var(--muted);font-weight:600}
 </style></head><body>
 <h1>🏘️ شقق الإيجار لـ محمود — قرب مكتبه، الطيران / مدينة نصر</h1>
-<p class="sub">67 شقة فاضية (غير مفروشة)، 3+ غرف، 10-18 ألف، آخر 20 يوم — ⛔ مستبعد: زهراء مدينة نصر، التبة، شبرا (بالعنوان والوصف ورابط المرجع). مرتبة حسب أقرب وقت قيادة من المكتب.</p>
+<p class="sub">66 شقة فاضية (غير مفروشة)، 3+ غرف، 10-18 ألف، آخر 20 يوم — ⛔ مستبعد: زهراء مدينة نصر، التبة، شبرا (بالعنوان والوصف ورابط المرجع). مرتبة حسب أقرب وقت قيادة من المكتب. م² والحمامات معروضة فقط عند التحقق منها من المصدر.</p>
 <div class="toolbar">
  <input id="q" type="search" placeholder="بحث (عربي/إنجليزي)…">
  <select id="f-seller"><option value="all">All / الكل</option><option value="Broker">Broker</option><option value="Owner">Owner</option><option value="Verify on contact">Verify on contact</option></select>
@@ -105,7 +123,7 @@ th{padding:0 14px 4px;text-align:start;font-size:12px;color:var(--muted);font-we
 <th>Area · Posted<br>المنطقة · التاريخ</th>
 <th>Title<br>العنوان</th>
 <th>Price<br>السعر</th>
-<th>Bedrooms·m²<br>الغرف · المساحة</th>
+<th>Bedrooms·m²·Bath<br>الغرف · المساحة · الحمامات</th>
 <th>Platform<br>المنصة</th>
 <th>Seller<br>المعلن/المصدر</th>
 <th>Drive time<br>وقت القيادة</th>
@@ -120,8 +138,6 @@ th{padding:0 14px 4px;text-align:start;font-size:12px;color:var(--muted);font-we
      cnt=document.getElementById('count');
  var rows=Array.prototype.slice.call(document.querySelectorAll('tr.row'));
  var tb=document.querySelector('tbody');
- var n=document.createElement('span'); // placeholder to avoid layout shift
- function val(el){return el.value;}
  function apply(){
   var term=q.value.trim().toLowerCase(), st=fs.value, b=fb.value;
   var shown=rows.filter(function(r){
@@ -150,6 +166,7 @@ th{padding:0 14px 4px;text-align:start;font-size:12px;color:var(--muted);font-we
 
 def build():
     rows = json.load(open(SRC))
+    assert_clean(rows)
     body = "".join(row_html(r) for r in rows)
     out = HEAD.replace("<!--ROWS-->", body)
     with open(OUT, "w", encoding="utf-8") as f:
